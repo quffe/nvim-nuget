@@ -108,7 +108,6 @@ function M.close_popup()
 	M.state.popup_bufnr = nil
 end
 
--- Function to open search popup
 function M.open_package_search()
 	-- Close any existing popup
 	M.close_popup()
@@ -127,21 +126,13 @@ function M.open_package_search()
 	M.state.popup_bufnr = vim.api.nvim_win_get_buf(M.state.popup_win_id)
 
 	-- Set initial mappings
-	vim.api.nvim_buf_set_keymap(
-		M.state.popup_bufnr,
-		"n",
-		"<C-f>",
-		':lua require("nuget").focus_search_input()<CR>',
-		{ noremap = true, silent = true }
-	)
+	vim.cmd([[
+        nnoremap <buffer> <C-f> <Cmd>lua require('nuget').focus_search_input()<CR>
+        nnoremap <buffer> q <Cmd>lua require('nuget').close_popup()<CR>
+    ]])
 
-	vim.api.nvim_buf_set_keymap(
-		M.state.popup_bufnr,
-		"n",
-		"q",
-		':lua require("nuget").close_popup()<CR>',
-		{ noremap = true, silent = true }
-	)
+	-- Immediately focus on search input on initialization
+	M.focus_search_input()
 end
 
 -- Function to focus search input
@@ -184,13 +175,17 @@ function M.install_queued_packages()
 
 	-- Provide comprehensive notification
 	if #successful_packages > 0 then
-		vim.notify("Successfully installed packages: " .. table.concat(successful_packages, ", "), vim.log.levels.INFO)
+		local success_msg = "Package(s) installed successfully:\n"
+		for _, pkg in ipairs(successful_packages) do
+			success_msg = success_msg .. string.format(" - %s\n", pkg)
+		end
+		vim.notify(success_msg, vim.log.levels.INFO)
 	end
 
 	if #failed_packages > 0 then
 		local error_msg = "Failed to install packages:\n"
 		for _, pkg in ipairs(failed_packages) do
-			error_msg = error_msg .. string.format("%s:\n%s\n", pkg.package, pkg.error)
+			error_msg = error_msg .. string.format(" - %s:\n%s\n", pkg.package, pkg.error)
 		end
 		vim.notify(error_msg, vim.log.levels.ERROR)
 	end
