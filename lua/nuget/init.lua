@@ -165,26 +165,41 @@ function M.install_queued_packages()
 		return
 	end
 
-	local packages_str = table.concat(M.state.installation_queue, " ")
-	local cmd = string.format("dotnet add package %s", packages_str)
+	-- Track successful and failed installations
+	local successful_packages = {}
+	local failed_packages = {}
 
-	-- Use systemlist to get both output and error information
-	local result = vim.fn.systemlist(cmd)
-	local exit_code = vim.v.shell_error
+	-- Install packages one by one
+	for _, package in ipairs(M.state.installation_queue) do
+		local cmd = string.format("dotnet add package %s", package)
+		local result = vim.fn.systemlist(cmd)
+		local exit_code = vim.v.shell_error
 
-	if exit_code == 0 then
-		vim.notify(
-			string.format("Installed %d packages:", #M.state.installation_queue)
-				.. table.concat(M.state.installation_queue, ", "),
-			vim.log.levels.INFO
-		)
-		M.state.installation_queue = {}
-		M.render_results()
-	else
-		-- If installation fails, show detailed error message
-		vim.notify("Failed to install packages:\n" .. table.concat(result, "\n"), vim.log.levels.ERROR)
+		if exit_code == 0 then
+			table.insert(successful_packages, package)
+		else
+			table.insert(failed_packages, { package = package, error = table.concat(result, "\n") })
+		end
 	end
+
+	-- Provide comprehensive notification
+	if #successful_packages > 0 then
+		vim.notify("Successfully installed packages: " .. table.concat(successful_packages, ", "), vim.log.levels.INFO)
+	end
+
+	if #failed_packages > 0 then
+		local error_msg = "Failed to install packages:\n"
+		for _, pkg in ipairs(failed_packages) do
+			error_msg = error_msg .. string.format("%s:\n%s\n", pkg.package, pkg.error)
+		end
+		vim.notify(error_msg, vim.log.levels.ERROR)
+	end
+
+	-- Clear the installation queue
+	M.state.installation_queue = {}
+	M.render_results()
 end
+
 -- Setup function for the plugin
 function M.setup()
 	vim.api.nvim_create_user_command("NugetPackage", M.open_package_search, {})
