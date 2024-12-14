@@ -21,6 +21,7 @@ M.state = {
 	current_results = {},
 	installation_queue = {},
 	popup_win_id = nil,
+	popup_bufnr = nil,
 	search_input = "",
 }
 
@@ -48,10 +49,14 @@ function M.render_results()
 		return
 	end
 
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
-	vim.api.nvim_buf_set_option(bufnr, "swapfile", false)
+	-- Create or reuse the buffer
+	if not M.state.popup_bufnr or not vim.api.nvim_buf_is_valid(M.state.popup_bufnr) then
+		M.state.popup_bufnr = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_option(M.state.popup_bufnr, "buftype", "nofile")
+		vim.api.nvim_buf_set_option(M.state.popup_bufnr, "swapfile", false)
+	end
 
+	-- -- Previous code for creating display lines remains the same...
 	local display_lines = {}
 	for i, package in ipairs(M.state.current_results) do
 		local queued = false
@@ -66,18 +71,16 @@ function M.render_results()
 		table.insert(display_lines, string.format("%s%s (%s)", prefix, package.id, package.version))
 	end
 
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, display_lines)
+	vim.api.nvim_buf_set_lines(M.state.popup_bufnr, 0, -1, false, display_lines)
+	vim.api.nvim_win_set_buf(M.state.popup_win_id, M.state.popup_bufnr)
 
-	-- Set key mappings for the results buffer
-	vim.api.nvim_buf_set_keymap(
-		bufnr,
-		"n",
-		"<space>",
-		':lua require("nuget").toggle_package_queue()<CR>',
-		{ noremap = true, silent = true }
-	)
-
-	vim.api.nvim_win_set_buf(M.state.popup_win_id, bufnr)
+	-- Use vim.cmd for buffer-local keymaps
+	vim.cmd([[
+        nnoremap <buffer> <space> <Cmd>lua require('nuget').toggle_package_queue()<CR>
+        nnoremap <buffer> <C-f> <Cmd>lua require('nuget').focus_search_input()<CR>
+        nnoremap <buffer> I <Cmd>lua require('nuget').install_queued_packages()<CR>
+        nnoremap <buffer> q <Cmd>lua require('nuget').close_popup()<CR>
+    ]])
 end
 
 -- Function to toggle package in installation queue
@@ -96,8 +99,20 @@ function M.toggle_package_queue()
 	end
 end
 
+-- Function to close the popup
+function M.close_popup()
+	if M.state.popup_win_id and vim.api.nvim_win_is_valid(M.state.popup_win_id) then
+		vim.api.nvim_win_close(M.state.popup_win_id, true)
+	end
+	M.state.popup_win_id = nil
+	M.state.popup_bufnr = nil
+end
+
 -- Function to open search popup
 function M.open_package_search()
+	-- Close any existing popup
+	M.close_popup()
+
 	-- Create popup window
 	local width = 80
 	local height = 20
@@ -109,11 +124,11 @@ function M.open_package_search()
 	}
 
 	M.state.popup_win_id = popup.create("", popup_opts)
-	local bufnr = vim.api.nvim_win_get_buf(M.state.popup_win_id)
+	M.state.popup_bufnr = vim.api.nvim_win_get_buf(M.state.popup_win_id)
 
-	-- Set up input for package search
+	-- Set initial mappings
 	vim.api.nvim_buf_set_keymap(
-		bufnr,
+		M.state.popup_bufnr,
 		"n",
 		"<C-f>",
 		':lua require("nuget").focus_search_input()<CR>',
@@ -121,10 +136,10 @@ function M.open_package_search()
 	)
 
 	vim.api.nvim_buf_set_keymap(
-		bufnr,
+		M.state.popup_bufnr,
 		"n",
-		"I",
-		':lua require("nuget").install_queued_packages()<CR>',
+		"q",
+		':lua require("nuget").close_popup()<CR>',
 		{ noremap = true, silent = true }
 	)
 end
@@ -153,19 +168,23 @@ function M.install_queued_packages()
 	local packages_str = table.concat(M.state.installation_queue, " ")
 	local cmd = string.format("dotnet add package %s", packages_str)
 
-	vim.fn.jobstart(cmd, {
-		on_exit = function(_, code)
-			if code == 0 then
-				vim.notify(string.format("Installed %d packages", #M.state.installation_queue), vim.log.levels.INFO)
-				M.state.installation_queue = {}
-				M.render_results()
-			else
-				vim.notify("Failed to install packages", vim.log.levels.ERROR)
-			end
-		end,
-	})
-end
+	-- Use systemlist to get both output and error information
+	local result = vim.fn.systemlist(cmd)
+	local exit_code = vim.v.shell_error
 
+	if exit_code == 0 then
+		vim.notify(
+			string.format("Installed %d packages:", #M.state.installation_queue)
+				.. table.concat(M.state.installation_queue, ", "),
+			vim.log.levels.INFO
+		)
+		M.state.installation_queue = {}
+		M.render_results()
+	else
+		-- If installation fails, show detailed error message
+		vim.notify("Failed to install packages:\n" .. table.concat(result, "\n"), vim.log.levels.ERROR)
+	end
+end
 -- Setup function for the plugin
 function M.setup()
 	vim.api.nvim_create_user_command("NugetPackage", M.open_package_search, {})
