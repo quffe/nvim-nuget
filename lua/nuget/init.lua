@@ -6,6 +6,16 @@ local M = {}
 local curl = require("plenary.curl")
 local popup = require("plenary.popup")
 
+-- Custom implementation of tbl_indexof
+local function tbl_indexof(tbl, val)
+	for k, v in ipairs(tbl) do
+		if v == val then
+			return k
+		end
+	end
+	return -1
+end
+
 -- State variables
 M.state = {
 	current_results = {},
@@ -44,7 +54,14 @@ function M.render_results()
 
 	local display_lines = {}
 	for i, package in ipairs(M.state.current_results) do
-		local queued = vim.tbl_contains(M.state.installation_queue, package.id)
+		local queued = false
+		for _, queued_package in ipairs(M.state.installation_queue) do
+			if queued_package == package.id then
+				queued = true
+				break
+			end
+		end
+
 		local prefix = queued and "[X] " or "[ ] "
 		table.insert(display_lines, string.format("%s%s (%s)", prefix, package.id, package.version))
 	end
@@ -69,7 +86,7 @@ function M.toggle_package_queue()
 	local package = M.state.current_results[line]
 
 	if package then
-		local index = vim.tbl_indexof(M.state.installation_queue, package.id)
+		local index = tbl_indexof(M.state.installation_queue, package.id)
 		if index == -1 then
 			table.insert(M.state.installation_queue, package.id)
 		else
@@ -114,7 +131,6 @@ end
 
 -- Function to focus search input
 function M.focus_search_input()
-	-- Implement input method (could use vim.ui.input or a custom input)
 	vim.ui.input({
 		prompt = "Search Nuget Packages: ",
 		default = M.state.search_input,
