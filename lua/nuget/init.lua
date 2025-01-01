@@ -23,7 +23,43 @@ M.state = {
 	popup_win_id = nil,
 	popup_bufnr = nil,
 	search_input = "",
+	installed_packages = {},
 }
+
+-- Function to find csproj to get current
+function M.find_csproj()
+	-- Use vim.fn.glob to find .csproj files in current directory
+	local files = vim.fn.glob("*.csproj")
+	if files == "" then
+		return nil
+	end
+	-- Return the first .csproj found
+	return vim.split(files, "\n")[1]
+end
+
+function M.read_installed_packages()
+	local csproj_file = M.find_csproj()
+	if not csproj_file then
+		return {}
+	end
+
+	local content = vim.fn.readfile(csproj_file)
+	if not content then
+		return {}
+	end
+
+	local packages = {}
+	for _, line in ipairs(content) do
+		-- Look for PackageReference lines
+		local package_name = string.match(line, 'PackageReference%s+Include="([^"]+)"')
+		local version = string.match(line, 'Version="([^"]+)"')
+		if package_name and version then
+			packages[package_name] = version
+		end
+	end
+
+	return packages
+end
 
 -- Function to query Nuget packages
 function M.query_packages(query)
@@ -57,6 +93,20 @@ function M.render_results()
 	end
 
 	local display_lines = {}
+
+	-- Add currently installed packages section
+	table.insert(display_lines, "Currently Installed Packages:")
+	local installed = M.state.installed_packages
+	if vim.tbl_count(installed) == 0 then
+		table.insert(display_lines, "  No packages installed")
+	else
+		for package, version in pairs(installed) do
+			table.insert(display_lines, string.format("  - %s (%s)", package, version))
+		end
+	end
+
+	-- Add separator
+	table.insert(display_lines, "")
 
 	-- Add header for installation queue
 	table.insert(display_lines, "Installation Queue:")
@@ -94,7 +144,7 @@ function M.render_results()
 	vim.api.nvim_buf_set_lines(M.state.popup_bufnr, 0, -1, false, display_lines)
 	vim.api.nvim_win_set_buf(M.state.popup_win_id, M.state.popup_bufnr)
 
-	-- Use vim.cmd for buffer-local keymaps
+	-- Set keymaps
 	vim.cmd([[
         nnoremap <buffer> <space> <Cmd>lua require('nuget').toggle_package_queue()<CR>
         nnoremap <buffer> <C-f> <Cmd>lua require('nuget').focus_search_input()<CR>
@@ -108,7 +158,13 @@ function M.toggle_package_queue()
 	local line = vim.api.nvim_win_get_cursor(0)[1]
 
 	-- Calculate offset based on header lines
-	local header_lines = 4 -- "Installation Queue:" + queue items + empty line + "Search Results:"
+	local header_lines = 6 -- "Currently Installed:" + installed items + empty line + "Installation Queue:" + queue items + empty line + "Search Results:"
+	if vim.tbl_count(M.state.installed_packages) == 0 then
+		header_lines = header_lines + 1 -- "No packages installed" message
+	else
+		header_lines = header_lines + vim.tbl_count(M.state.installed_packages)
+	end
+
 	if #M.state.installation_queue == 0 then
 		header_lines = header_lines + 1 -- "No packages queued" message
 	else
@@ -132,6 +188,7 @@ function M.toggle_package_queue()
 		end
 	end
 end
+
 -- Function to close the popup
 function M.close_popup()
 	if M.state.popup_win_id and vim.api.nvim_win_is_valid(M.state.popup_win_id) then
@@ -144,6 +201,9 @@ end
 function M.open_package_search()
 	-- Close any existing popup
 	M.close_popup()
+
+	-- Load installed packages
+	M.state.installed_packages = M.read_installed_packages()
 
 	-- Create popup window
 	local width = 80
@@ -225,6 +285,10 @@ function M.install_queued_packages()
 
 	-- Clear the installation queue
 	M.state.installation_queue = {}
+
+	-- Refresh installed packages
+	M.state.installed_packages = M.read_installed_packages()
+
 	M.render_results()
 end
 
