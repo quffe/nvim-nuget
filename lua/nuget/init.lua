@@ -56,19 +56,39 @@ function M.render_results()
 		vim.api.nvim_buf_set_option(M.state.popup_bufnr, "swapfile", false)
 	end
 
-	-- -- Previous code for creating display lines remains the same...
 	local display_lines = {}
-	for i, package in ipairs(M.state.current_results) do
-		local queued = false
-		for _, queued_package in ipairs(M.state.installation_queue) do
-			if queued_package == package.id then
-				queued = true
-				break
-			end
-		end
 
-		local prefix = queued and "[X] " or "[ ] "
-		table.insert(display_lines, string.format("%s%s (%s)", prefix, package.id, package.version))
+	-- Add header for installation queue
+	table.insert(display_lines, "Installation Queue:")
+	if #M.state.installation_queue == 0 then
+		table.insert(display_lines, "  No packages queued for installation")
+	else
+		for _, package in ipairs(M.state.installation_queue) do
+			table.insert(display_lines, string.format("  - %s", package))
+		end
+	end
+
+	-- Add separator
+	table.insert(display_lines, "")
+	table.insert(display_lines, "Search Results:")
+	table.insert(display_lines, "")
+
+	-- Add search results
+	if #M.state.current_results == 0 then
+		table.insert(display_lines, "  No packages found")
+	else
+		for _, package in ipairs(M.state.current_results) do
+			local queued = false
+			for _, queued_package in ipairs(M.state.installation_queue) do
+				if queued_package == package.id then
+					queued = true
+					break
+				end
+			end
+
+			local prefix = queued and "[X] " or "[ ] "
+			table.insert(display_lines, string.format("%s%s (%s)", prefix, package.id, package.version))
+		end
 	end
 
 	vim.api.nvim_buf_set_lines(M.state.popup_bufnr, 0, -1, false, display_lines)
@@ -86,19 +106,32 @@ end
 -- Function to toggle package in installation queue
 function M.toggle_package_queue()
 	local line = vim.api.nvim_win_get_cursor(0)[1]
-	local package = M.state.current_results[line]
 
-	if package then
-		local index = tbl_indexof(M.state.installation_queue, package.id)
-		if index == -1 then
-			table.insert(M.state.installation_queue, package.id)
-		else
-			table.remove(M.state.installation_queue, index)
+	-- Calculate offset based on header lines
+	local header_lines = 4 -- "Installation Queue:" + queue items + empty line + "Search Results:"
+	if #M.state.installation_queue == 0 then
+		header_lines = header_lines + 1 -- "No packages queued" message
+	else
+		header_lines = header_lines + #M.state.installation_queue
+	end
+
+	-- Adjust line number to account for header
+	local result_index = line - header_lines
+
+	-- Only process if we're in the results section
+	if result_index > 0 and result_index <= #M.state.current_results then
+		local package = M.state.current_results[result_index]
+		if package then
+			local index = tbl_indexof(M.state.installation_queue, package.id)
+			if index == -1 then
+				table.insert(M.state.installation_queue, package.id)
+			else
+				table.remove(M.state.installation_queue, index)
+			end
+			M.render_results()
 		end
-		M.render_results()
 	end
 end
-
 -- Function to close the popup
 function M.close_popup()
 	if M.state.popup_win_id and vim.api.nvim_win_is_valid(M.state.popup_win_id) then
