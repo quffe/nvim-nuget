@@ -95,13 +95,13 @@ function M.render_results()
 	local display_lines = {}
 
 	-- Add currently installed packages section
-	table.insert(display_lines, "Currently Installed Packages:")
+	table.insert(display_lines, "Currently Installed Packages: (press X to remove)")
 	local installed = M.state.installed_packages
 	if vim.tbl_count(installed) == 0 then
 		table.insert(display_lines, "  No packages installed")
 	else
 		for package, version in pairs(installed) do
-			table.insert(display_lines, string.format("  - %s (%s)", package, version))
+			table.insert(display_lines, string.format("  [x] %s (%s)", package, version))
 		end
 	end
 
@@ -146,6 +146,7 @@ function M.render_results()
 
 	-- Set keymaps
 	vim.cmd([[
+        nnoremap <buffer> X <Cmd>lua require('nuget').handle_x_press()<CR>
         nnoremap <buffer> <space> <Cmd>lua require('nuget').toggle_package_queue()<CR>
         nnoremap <buffer> <C-f> <Cmd>lua require('nuget').focus_search_input()<CR>
         nnoremap <buffer> I <Cmd>lua require('nuget').install_queued_packages()<CR>
@@ -290,6 +291,57 @@ function M.install_queued_packages()
 	M.state.installed_packages = M.read_installed_packages()
 
 	M.render_results()
+end
+
+-- Function to remove package
+function M.remove_package(package_name)
+	local cmd = string.format("dotnet remove package %s", package_name)
+	local result = vim.fn.systemlist(cmd)
+	local exit_code = vim.v.shell_error
+
+	if exit_code == 0 then
+		vim.notify(string.format("Package removed successfully:\n - %s", package_name), vim.log.levels.INFO)
+		-- Refresh installed packages
+		M.state.installed_packages = M.read_installed_packages()
+		M.render_results()
+	else
+		vim.notify(
+			string.format("Failed to remove package %s:\n%s", package_name, table.concat(result, "\n")),
+			vim.log.levels.ERROR
+		)
+	end
+end
+
+-- Function to handle x press
+function M.handle_x_press()
+	local line = vim.api.nvim_win_get_cursor(0)[1]
+
+	-- Calculate the number of lines in the installed packages section
+	local installed_count = vim.tbl_count(M.state.installed_packages)
+	local installed_section_start = 2 -- 1 for header + 1 for first package line
+	local installed_section_end = installed_count + 1 -- +1 for header
+
+	if installed_count == 0 then
+		installed_section_end = installed_section_end + 1 -- +1 for "No packages installed" message
+	end
+
+	-- Check if we're in the installed packages section
+	if line >= installed_section_start and line <= installed_section_end then
+		-- Get the package from the current line
+		local current_line = vim.api.nvim_buf_get_lines(M.state.popup_bufnr, line - 1, line, false)[1]
+		local package_name = string.match(current_line, "%[x%] ([^%(]+)")
+		if package_name then
+			package_name = string.gsub(package_name, "^%s*(.-)%s*$", "%1") -- trim whitespace
+			-- Confirm before removing
+			vim.ui.input({
+				prompt = string.format("Remove package '%s'? (y/n): ", package_name),
+			}, function(input)
+				if input and string.lower(input) == "y" then
+					M.remove_package(package_name)
+				end
+			end)
+		end
+	end
 end
 
 -- Setup function for the plugin
