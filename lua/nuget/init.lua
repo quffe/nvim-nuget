@@ -3,146 +3,17 @@
 local M = {}
 
 -- Dependencies
-local curl = require("plenary.curl")
 local popup = require("plenary.popup")
 local ui = require("nuget.ui")
+local nuget = require("nuget.nuget")
 
 M.make_line = ui.make_line
 local center_text = ui.center_text
 local tbl_indexof = ui.tbl_indexof
-
--- function to show help
-function M.show_help()
-	local help_lines = {
-		"Nuget Package Manager Help",
-		"------------------------",
-		"",
-		"Available Commands:",
-		"  <C-f>    Search for packages",
-		"  <space>  Toggle package in installation queue",
-		"  x        Remove installed package (when cursor is on installed package)",
-		"  I        Install all packages in queue",
-		"  q        Close window",
-		"  g?       Toggle this help",
-		"",
-		"Press any key to close help",
-	}
-
-	-- Create help buffer and window
-	local help_buf = vim.api.nvim_create_buf(false, true)
-	local width = 60
-	local height = #help_lines
-	local row = math.floor((vim.o.lines - height) / 2)
-	local col = math.floor((vim.o.columns - width) / 2)
-
-	local help_win = vim.api.nvim_open_win(help_buf, true, {
-		relative = "editor",
-		row = row,
-		col = col,
-		width = width,
-		height = height,
-		style = "minimal",
-		border = "rounded",
-	})
-
-	-- Set help buffer content
-	vim.api.nvim_buf_set_lines(help_buf, 0, -1, false, help_lines)
-
-	-- Set help highlighting
-	vim.api.nvim_buf_add_highlight(help_buf, -1, "Title", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(help_buf, -1, "Special", 1, 0, -1)
-
-	for i = 3, #help_lines do
-		if help_lines[i]:match("^  %S+%s+") then
-			-- Highlight command
-			local cmd_end = help_lines[i]:find("%s%s")
-			vim.api.nvim_buf_add_highlight(help_buf, -1, "Statement", i, 2, cmd_end)
-			-- Highlight description
-			vim.api.nvim_buf_add_highlight(help_buf, -1, "Comment", i, cmd_end, -1)
-		end
-	end
-
-	-- Set buffer local options
-	vim.api.nvim_buf_set_option(help_buf, "bufhidden", "wipe")
-
-	-- Map all keys to close the help buffer
-	local function close_help()
-		if vim.api.nvim_win_is_valid(help_win) then
-			vim.api.nvim_win_close(help_win, true)
-		end
-	end
-
-	-- Map any printable character to close help
-	for i = 32, 126 do
-		vim.keymap.set("n", string.char(i), close_help, { buffer = help_buf, silent = true })
-	end
-
-	-- Map special keys
-	local special_keys = { "<CR>", "<Space>", "<Esc>", "q" }
-	for _, key in ipairs(special_keys) do
-		vim.keymap.set("n", key, close_help, { buffer = help_buf, silent = true })
-	end
-
-	-- Auto-close on buffer leave
-	vim.api.nvim_create_autocmd({ "BufLeave" }, {
-		buffer = help_buf,
-		callback = close_help,
-		once = true,
-	})
-end
-
--- Function to find csproj to get current
-function M.find_csproj()
-	-- Use vim.fn.glob to find .csproj files in current directory
-	local files = vim.fn.glob("*.csproj")
-	if files == "" then
-		return nil
-	end
-	-- Return the first .csproj found
-	return vim.split(files, "\n")[1]
-end
-
-function M.read_installed_packages()
-	local csproj_file = M.find_csproj()
-	if not csproj_file then
-		return {}
-	end
-
-	local content = vim.fn.readfile(csproj_file)
-	if not content then
-		return {}
-	end
-
-	local packages = {}
-	for _, line in ipairs(content) do
-		-- Look for PackageReference lines
-		local package_name = string.match(line, 'PackageReference%s+Include="([^"]+)"')
-		local version = string.match(line, 'Version="([^"]+)"')
-		if package_name and version then
-			packages[package_name] = version
-		end
-	end
-
-	return packages
-end
-
--- Function to query Nuget packages
-function M.query_packages(query)
-	local url = string.format("https://azuresearch-usnc.nuget.org/query?q=%s&take=20", query)
-
-	local response = curl.get({
-		url = url,
-		accept = "application/json",
-	})
-
-	if response.status ~= 200 then
-		vim.notify("Failed to fetch packages", vim.log.levels.ERROR)
-		return {}
-	end
-
-	local data = vim.fn.json_decode(response.body)
-	return data.data or {}
-end
+M.show_help = ui.show_help
+M.find_csproj = nuget.find_csproj
+M.read_installed_packages = nuget.read_installed_packages
+M.query_packages = nuget.query_packages
 
 -- State variables
 M.state = {
@@ -163,8 +34,8 @@ function M.render_results()
 	-- Create or reuse the buffer
 	if not M.state.popup_bufnr or not vim.api.nvim_buf_is_valid(M.state.popup_bufnr) then
 		M.state.popup_bufnr = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_option(M.state.popup_bufnr, "buftype", "nofile")
-		vim.api.nvim_buf_set_option(M.state.popup_bufnr, "swapfile", false)
+		vim.api.nvim_set_option_value("buftype", "nofile", { buf = M.state.popup_bufnr })
+		vim.api.nvim_set_option_value("swapfile", false, { buf = M.state.popup_bufnr })
 	end
 
 	local display_lines = {}
@@ -246,7 +117,7 @@ function M.render_results()
 	end
 
 	-- Make buffer modifiable temporarily
-	vim.api.nvim_buf_set_option(M.state.popup_bufnr, "modifiable", true)
+	vim.api.nvim_set_option_value("modifiable", true, { buf = M.state.popup_bufnr })
 
 	vim.api.nvim_buf_set_lines(M.state.popup_bufnr, 0, -1, false, display_lines)
 	-- vim.api.nvim_win_set_buf(M.state.popup_win_id, M.state.popup_bufnr)
@@ -262,7 +133,7 @@ function M.render_results()
 		)
 	end
 
-	vim.api.nvim_buf_set_option(M.state.popup_bufnr, "modifiable", false)
+	vim.api.nvim_set_option_value("modifiable", false, { buf = M.state.popup_bufnr })
 	-- Set keymaps
 	vim.cmd([[
         nnoremap <buffer> X <Cmd>lua require('nuget').handle_x_press()<CR>
@@ -343,8 +214,8 @@ function M.open_package_search()
 	M.state.popup_win_id = popup.create("", popup_opts)
 	M.state.popup_bufnr = vim.api.nvim_win_get_buf(M.state.popup_win_id)
 
-	vim.api.nvim_buf_set_option(M.state.popup_bufnr, "modifiable", false)
-	vim.api.nvim_buf_set_option(M.state.popup_bufnr, "buftype", "nofile")
+	vim.api.nvim_set_option_value("modifiable", false, { buf = M.state.popup_bufnr })
+	vim.api.nvim_set_option_value("buftype", "nofile", { buf = M.state.popup_bufnr })
 
 	-- Set initial mappings
 	vim.cmd([[
