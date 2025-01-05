@@ -23,6 +23,7 @@ M.state = {
 	popup_bufnr = nil,
 	search_input = "",
 	installed_packages = {},
+	installation_outputs = {},
 }
 
 -- Function to render package results
@@ -88,13 +89,23 @@ function M.render_results()
 		add_line_with_highlights(M.make_line({ { "  No packages queued for installation", "Comment" } }))
 	else
 		for _, package in ipairs(M.state.installation_queue) do
+			-- Add the package name
 			add_line_with_highlights(M.make_line({
 				{ "  - ", nil },
 				{ package, "Special" },
 			}))
+
+			-- If there's installation output for this package, show it
+			if M.state.installation_outputs[package] then
+				-- Split the output into lines and add them with indentation
+				for line in vim.gsplit(M.state.installation_outputs[package], "\n") do
+					add_line_with_highlights(M.make_line({
+						{ "      " .. line, "Comment" },
+					}))
+				end
+			end
 		end
 	end
-
 	-- Add separator
 	add_line_with_highlights(M.make_line({ { "", nil } }))
 	add_line_with_highlights(M.make_line({ { "Search Results:", "Title" } }))
@@ -248,47 +259,105 @@ function M.install_queued_packages()
 		return
 	end
 
-	-- Track successful and failed installations
+	-- Clear previous installation outputs
+	M.state.installation_outputs = {}
+
+	local completed_installations = 0
+	local total_installations = #M.state.installation_queue
 	local successful_packages = {}
 	local failed_packages = {}
 
-	-- Install packages one by one
+	-- Function to update the output for a package (now only keeps latest line)
+	local function update_package_output(package, new_line, is_final)
+		vim.schedule(function()
+			if M.state.popup_bufnr and vim.api.nvim_buf_is_valid(M.state.popup_bufnr) then
+				M.state.installation_outputs[package] = new_line
+				M.render_results()
+
+				-- If this is the final message, schedule its removal
+				if is_final then
+					vim.defer_fn(function()
+						M.state.installation_outputs[package] = nil
+						M.render_results()
+					end, 2000) -- Remove after 2 seconds
+				end
+			end
+		end)
+	end
+
 	for _, package in ipairs(M.state.installation_queue) do
-		local cmd = string.format("dotnet add package %s", package)
-		local result = vim.fn.systemlist(cmd)
-		local exit_code = vim.v.shell_error
+		update_package_output(package, "Starting installation...")
 
-		if exit_code == 0 then
-			table.insert(successful_packages, package)
-		else
-			table.insert(failed_packages, { package = package, error = table.concat(result, "\n") })
-		end
+		local Job = require("plenary.job")
+
+		Job:new({
+			command = "dotnet",
+			args = { "add", "package", package },
+			on_stdout = vim.schedule_wrap(function(_, line)
+				if line and line ~= "" then
+					update_package_output(package, line)
+				end
+			end),
+			on_stderr = vim.schedule_wrap(function(_, line)
+				if line and line ~= "" then
+					update_package_output(package, "Error: " .. line)
+				end
+			end),
+			on_exit = vim.schedule_wrap(function(j, code)
+				completed_installations = completed_installations + 1
+
+				if code == 0 then
+					table.insert(successful_packages, package)
+					update_package_output(
+						package,
+						"Installation completed successfully!",
+						true -- Mark as final message
+					)
+				else
+					table.insert(
+						failed_packages,
+						{ package = package, error = j:stderr_result()[1] or "Unknown error" }
+					)
+					update_package_output(
+						package,
+						"Installation failed with code " .. code,
+						true -- Mark as final message
+					)
+				end
+
+				if completed_installations == total_installations then
+					vim.schedule(function()
+						if M.state.popup_bufnr and vim.api.nvim_buf_is_valid(M.state.popup_bufnr) then
+							-- Show notifications
+							if #successful_packages > 0 then
+								local success_msg = "Package(s) installed successfully:\n"
+								for _, pkg in ipairs(successful_packages) do
+									success_msg = success_msg .. string.format(" - %s\n", pkg)
+								end
+								vim.notify(success_msg, vim.log.levels.INFO)
+							end
+
+							if #failed_packages > 0 then
+								local error_msg = "Failed to install packages:\n"
+								for _, pkg in ipairs(failed_packages) do
+									error_msg = error_msg .. string.format(" - %s:\n%s\n", pkg.package, pkg.error)
+								end
+								vim.notify(error_msg, vim.log.levels.ERROR)
+							end
+
+							-- Update final state
+							vim.defer_fn(function()
+								M.state.installed_packages = M.read_installed_packages()
+								M.state.installation_queue = {}
+								M.state.installation_outputs = {} -- Clear all outputs
+								M.render_results()
+							end, 2000)
+						end
+					end)
+				end
+			end),
+		}):start()
 	end
-
-	-- Provide comprehensive notification
-	if #successful_packages > 0 then
-		local success_msg = "Package(s) installed successfully:\n"
-		for _, pkg in ipairs(successful_packages) do
-			success_msg = success_msg .. string.format(" - %s\n", pkg)
-		end
-		vim.notify(success_msg, vim.log.levels.INFO)
-	end
-
-	if #failed_packages > 0 then
-		local error_msg = "Failed to install packages:\n"
-		for _, pkg in ipairs(failed_packages) do
-			error_msg = error_msg .. string.format(" - %s:\n%s\n", pkg.package, pkg.error)
-		end
-		vim.notify(error_msg, vim.log.levels.ERROR)
-	end
-
-	-- Clear the installation queue
-	M.state.installation_queue = {}
-
-	-- Refresh installed packages
-	M.state.installed_packages = M.read_installed_packages()
-
-	M.render_results()
 end
 
 -- Function to remove package
@@ -316,8 +385,8 @@ function M.handle_x_press()
 
 	-- Calculate the number of lines in the installed packages section
 	local installed_count = vim.tbl_count(M.state.installed_packages)
-	local installed_section_start = 2 -- 1 for header + 1 for first package line
-	local installed_section_end = installed_count + 1 -- +1 for header
+	local installed_section_start = 3 -- account for header and empty line
+	local installed_section_end = installed_section_start + installed_count
 
 	if installed_count == 0 then
 		installed_section_end = installed_section_end + 1 -- +1 for "No packages installed" message
@@ -327,7 +396,8 @@ function M.handle_x_press()
 	if line >= installed_section_start and line <= installed_section_end then
 		-- Get the package from the current line
 		local current_line = vim.api.nvim_buf_get_lines(M.state.popup_bufnr, line - 1, line, false)[1]
-		local package_name = string.match(current_line, "%[x%] ([^%(]+)")
+		-- Updated pattern to match new format: "  󰡖 package_name (version)"
+		local package_name = string.match(current_line, "%s*󰡖%s+([^%(]+)")
 		if package_name then
 			package_name = string.gsub(package_name, "^%s*(.-)%s*$", "%1") -- trim whitespace
 			-- Confirm before removing
