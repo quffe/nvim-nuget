@@ -54,4 +54,29 @@ function M.query_packages(query)
 	return data.data or {}
 end
 
+-- Function to fetch package versions
+function M.fetch_package_versions(package_id, callback)
+	local url = string.format("https://api.nuget.org/v3-flatcontainer/%s/index.json", string.lower(package_id))
+
+	local Job = require("plenary.job")
+	Job:new({
+		command = "curl",
+		args = { "-s", url },
+		on_exit = vim.schedule_wrap(function(j, code)
+			if code == 0 then
+				local result = table.concat(j:result(), "")
+				local data = vim.fn.json_decode(result)
+				if data and data.versions then
+					callback(data.versions)
+				else
+					callback({})
+				end
+			else
+				vim.notify("Failed to fetch versions for " .. package_id, vim.log.levels.ERROR)
+				callback({})
+			end
+		end),
+	}):start()
+end
+
 return M
