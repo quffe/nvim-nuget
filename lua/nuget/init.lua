@@ -27,173 +27,8 @@ M.state = {
 	installation_outputs = {},
 	selected_versions = {},
 	available_versions = {},
+	unfiltered_results = {},
 }
-
--- Function to render package results
-function M.render_results()
-	if not M.state.popup_win_id or not vim.api.nvim_win_is_valid(M.state.popup_win_id) then
-		return
-	end
-
-	-- Create or reuse the buffer
-	if not M.state.popup_bufnr or not vim.api.nvim_buf_is_valid(M.state.popup_bufnr) then
-		M.state.popup_bufnr = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_set_option_value("buftype", "nofile", { buf = M.state.popup_bufnr })
-		vim.api.nvim_set_option_value("swapfile", false, { buf = M.state.popup_bufnr })
-	end
-
-	local display_lines = {}
-	local highlights = {}
-	local line_count = 0
-
-	-- Helper function to add line with highlight
-	local function add_line_with_highlights(line_data)
-		table.insert(display_lines, line_data.line)
-		for _, hl in ipairs(line_data.highlights) do
-			table.insert(highlights, {
-				line = line_count,
-				hl_group = hl.hl_group,
-				col_start = hl.col_start,
-				col_end = hl.col_end,
-			})
-		end
-		line_count = line_count + 1
-	end
-
-	-- Header
-	add_line_with_highlights(M.make_line({ { center_text("g? for help"), "Comment" } }))
-	add_line_with_highlights(M.make_line({ { "", nil } }))
-
-	-- Installed packages section
-	add_line_with_highlights(
-		M.make_line({ { "Currently Installed Packages: ", "Title" }, { "(press x to remove)", "Comment" } })
-	)
-
-	local installed = M.state.installed_packages
-	if vim.tbl_count(installed) == 0 then
-		add_line_with_highlights(M.make_line({ { "  No packages installed", "Comment" } }))
-	else
-		for package, version in pairs(installed) do
-			add_line_with_highlights(M.make_line({
-				{ "  ", nil },
-				{ "󰡖 ", "Statement" },
-				{ package, "Function" },
-				{ " (", nil },
-				{ version, "String" },
-				{ ")", nil },
-			}))
-		end
-	end
-
-	add_line_with_highlights(M.make_line({ { "", nil } }))
-	add_line_with_highlights(M.make_line({ { "Installation Queue:", "Title" } }))
-
-	if #M.state.installation_queue == 0 then
-		add_line_with_highlights(M.make_line({ { "  No packages queued for installation", "Comment" } }))
-	else
-		for _, package in ipairs(M.state.installation_queue) do
-			-- Add the package name
-			add_line_with_highlights(M.make_line({
-				{ "  - ", nil },
-				{ package, "Special" },
-			}))
-
-			-- If there's installation output for this package, show it
-			if M.state.installation_outputs[package] then
-				-- Split the output into lines and add them with indentation
-				for line in vim.gsplit(M.state.installation_outputs[package], "\n") do
-					add_line_with_highlights(M.make_line({
-						{ "      " .. line, "Comment" },
-					}))
-				end
-			end
-		end
-	end
-	-- Add separator
-	add_line_with_highlights(M.make_line({ { "", nil } }))
-	add_line_with_highlights(M.make_line({ { "Search Results:", "Title" } }))
-
-	-- Add search results
-	if #M.state.current_results == 0 then
-		add_line_with_highlights(M.make_line({ { "  No packages found", "Comment" } }))
-	else
-		for _, package in ipairs(M.state.current_results) do
-			local queued = tbl_indexof(M.state.installation_queue, package.id) ~= -1
-			local prefix = queued and "󰡖 " or "󰄱 "
-			add_line_with_highlights(M.make_line({
-				{ prefix, "Statement" },
-				{ package.id, "Function" },
-				{ " (", nil },
-				{ package.version, "String" },
-				{ ")", nil },
-			}))
-		end
-	end
-
-	-- Make buffer modifiable temporarily
-	vim.api.nvim_set_option_value("modifiable", true, { buf = M.state.popup_bufnr })
-
-	vim.api.nvim_buf_set_lines(M.state.popup_bufnr, 0, -1, false, display_lines)
-	-- vim.api.nvim_win_set_buf(M.state.popup_win_id, M.state.popup_bufnr)
-	-- Apply highlights
-	for _, hl in ipairs(highlights) do
-		vim.api.nvim_buf_add_highlight(
-			M.state.popup_bufnr,
-			-1,
-			hl.hl_group,
-			hl.line,
-			hl.col_start or 0,
-			hl.col_end or -1
-		)
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = M.state.popup_bufnr })
-	-- Set keymaps
-	vim.cmd([[
-        nnoremap <buffer> X <Cmd>lua require('nuget').handle_x_press()<CR>
-        nnoremap <buffer> <space> <Cmd>lua require('nuget').toggle_package_queue()<CR>
-        nnoremap <buffer> <C-f> <Cmd>lua require('nuget').focus_search_input()<CR>
-        nnoremap <buffer> I <Cmd>lua require('nuget').install_queued_packages()<CR>
-        nnoremap <buffer> q <Cmd>lua require('nuget').close_popup()<CR>
-        nnoremap <buffer> g? <Cmd>lua require('nuget').show_help()<CR>
-    ]])
-end
-
--- Function to toggle package in installation queue
-function M.toggle_package_queue()
-	local line = vim.api.nvim_win_get_cursor(0)[1]
-
-	-- Calculate offset based on header lines
-	local header_lines = 7 -- "Currently Installed:" + installed items + empty line + "Installation Queue:" + queue items + empty line + "Search Results:"
-	if vim.tbl_count(M.state.installed_packages) == 0 then
-		header_lines = header_lines + 1 -- "No packages installed" message
-	else
-		header_lines = header_lines + vim.tbl_count(M.state.installed_packages)
-	end
-
-	if #M.state.installation_queue == 0 then
-		header_lines = header_lines + 1 -- "No packages queued" message
-	else
-		header_lines = header_lines + #M.state.installation_queue
-	end
-
-	-- Adjust line number to account for header
-	local result_index = line - header_lines
-
-	-- Only process if we're in the results section
-	if result_index > 0 and result_index <= #M.state.current_results then
-		local package = M.state.current_results[result_index]
-		if package then
-			local index = tbl_indexof(M.state.installation_queue, package.id)
-			if index == -1 then
-				table.insert(M.state.installation_queue, package.id)
-			else
-				table.remove(M.state.installation_queue, index)
-			end
-			M.render_results()
-		end
-	end
-end
 
 -- Function to close the popup
 function M.close_popup()
@@ -204,6 +39,7 @@ function M.close_popup()
 	M.state.popup_bufnr = nil
 end
 
+-- Function to initialize buffer
 function M.open_package_search()
 	-- Close any existing popup
 	M.close_popup()
@@ -266,6 +102,7 @@ function M.focus_search_input()
 			M.state.search_input = input
 			-- Get search results and filter out installed packages
 			local all_results = M.query_packages(input)
+			M.state.unfiltered_results = all_results
 			M.state.current_results = M.filter_search_results(all_results)
 			M.render_results()
 		end
@@ -367,6 +204,7 @@ function M.install_queued_packages()
 
 							-- Update final state
 							vim.defer_fn(function()
+								M.state.current_results = M.filter_search_results(M.state.unfiltered_results)
 								M.state.installed_packages = M.read_installed_packages()
 								M.state.installation_queue = {}
 								M.state.installation_outputs = {} -- Clear all outputs
@@ -390,6 +228,7 @@ function M.remove_package(package_name)
 		vim.notify(string.format("Package removed successfully:\n - %s", package_name), vim.log.levels.INFO)
 		-- Refresh installed packages
 		M.state.installed_packages = M.read_installed_packages()
+		M.state.current_results = M.filter_search_results(M.state.unfiltered_results)
 		M.render_results()
 	else
 		vim.notify(
@@ -486,8 +325,6 @@ function M._display_version_selection(package_id, current_version, callback)
 	end)
 end
 
--- Update toggle_package_queue to handle versions
-local original_toggle_package_queue = M.toggle_package_queue
 -- Function to toggle package in queue (fix space key)
 function M.toggle_package_queue()
 	local line = vim.api.nvim_win_get_cursor(0)[1]
@@ -528,9 +365,7 @@ function M.toggle_package_queue()
 	end
 end
 
--- Update render_results to show selected versions
-local original_render_results = M.render_results
--- Update render_results function with version display
+-- function to render display
 function M.render_results()
 	if not M.state.popup_win_id or not vim.api.nvim_win_is_valid(M.state.popup_win_id) then
 		return

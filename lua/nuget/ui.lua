@@ -65,6 +65,7 @@ function M.show_help()
 		"  I        Install all packages in queue",
 		"  q        Close window",
 		"  g?       Toggle this help",
+    "  v        Change Version of installed or queued package",
 		"",
 		"Press any key to close help",
 	}

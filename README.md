@@ -29,8 +29,7 @@
 - `<C-f>` - Reopen search input
 - `I` - Install queued packages
 - `X` - To remove Installed package
+- `v` - To Change version
 
 ## Roadmap
-- Add version select
 - UI customizations
-- Curl on background
